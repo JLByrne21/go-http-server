@@ -1,2 +1,1 @@
-# go-http-server
-Building a simple http server in golang to learn more about the language.
+I built this simple HTTP server in go as part of the GO HTTP server course on CodeCrafters. It's been a great way to get to grips with using Go and learn how it compares to using other languages such as Python and Java.
