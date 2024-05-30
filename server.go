@@ -47,6 +47,7 @@ func handleConnection(conn net.Conn) {
 		basePath := getPath(recieved)
 		headerNames := getHeaderNames(recieved)
 		content := getContent(recieved)
+		method := getMethod(recieved)
 		noSlashContent := strings.Replace(content, "/", "", -1)
 		if basePath == "/" {
 			conn.Write([]byte("HTTP/1.1 200 OK\r\n\r\n"))
@@ -61,21 +62,44 @@ func handleConnection(conn net.Conn) {
 		} else if strings.HasPrefix(basePath, "/files/") {
 			directory := os.Args[2]
 			fileName := strings.TrimPrefix(basePath, "/files/")
-			data, err := os.ReadFile(directory + fileName)
-			if err != nil {
-				response := responseBuilder(404, "text/plain", "")
-				conn.Write([]byte(response))
-			} else {
-				stringData := string(data)
-				response := responseBuilder(200, "application/octet-stream", stringData)
-				conn.Write([]byte(response))
-			}
+			if method == "POST" {
+				body := getBody(recieved)
+				err = os.WriteFile(directory + fileName, []byte(body), 0644)
+				if err != nil {
+					response := responseBuilder(500, "text/plain", "")
+					conn.Write([]byte(response))
+				} else {
+					response := responseBuilder(201, "", "")
+					conn.Write([]byte(response))
+				}
 
+			} else {
+				data, err := os.ReadFile(directory + fileName)
+				if err != nil {
+					response := responseBuilder(404, "text/plain", "")
+					conn.Write([]byte(response))
+				} else {
+					stringData := string(data)
+					response := responseBuilder(200, "application/octet-stream", stringData)
+					conn.Write([]byte(response))
+				}
+			}
 		} else {
 			conn.Write([]byte(responseBuilder(404, "text/plain", "")))
 		}
 	}
 
+}
+
+func getMethod(request string) string {
+	line := strings.Split(request, "\r\n")[0]
+	method := strings.Split(line, " ")[0]
+	return method
+}
+
+func getBody(request string) string {
+	line := strings.Split(request, "\r\n")
+	return line[4]
 }
 
 func getContent(request string) string {
@@ -119,11 +143,19 @@ func getHeaderValue(request string, headerName string) string {
 }
 
 func responseBuilder(response_code int, content_type string, content string) string {
-	response := ""
+	response := "HTTP/1.1 "
 	if response_code == 200 {
-		response += "HTTP/1.1 200 OK\r\n"
+		response += "200 OK\r\n"
+	} else if response_code == 201 {
+		response += "201 Created"
 	} else if response_code == 404 {
-		response += "HTTP/1.1 404 Not Found\r\n\r\n"
+		response += "404 Not Found"
+	} else if response_code == 500 {
+		response += "500 Internal Server Error"
+	}
+
+	if response_code != 200 {
+		response += "\r\n\r\n"
 	}
 
 	if content_type != "" && content != "" {
