@@ -1,13 +1,18 @@
 package main
 
 import (
+	"bytes"
+	"compress/gzip"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"slices"
 	"strconv"
 	"strings"
 )
+
+var allowedEncoding = [1]string{"gzip"}
 
 func main() {
 	// You can use print statements as follows for debugging, they'll be visible when running tests.
@@ -47,35 +52,78 @@ func handleConnection(conn net.Conn) {
 		basePath := getPath(recieved)
 		headerNames := getHeaderNames(recieved)
 		content := getContent(recieved)
+		method := getMethod(recieved)
+		encoding := strings.Split(getHeaderValue(recieved, "accept-encoding"), ",")
+		var encodingMethod string
+		for _, method := range encoding {
+			method = strings.Trim(method, " ")
+			if checkEncoding(method) {
+				encodingMethod = method
+			} 
+		}
 		noSlashContent := strings.Replace(content, "/", "", -1)
 		if basePath == "/" {
 			conn.Write([]byte("HTTP/1.1 200 OK\r\n\r\n"))
 		} else if strings.HasPrefix(basePath, "/echo/") {
-			response := responseBuilder(200, "text/plain", content)
+			response := responseBuilder(200, "text/plain", encodingMethod, content)
 			conn.Write([]byte(response))
 		} else if slices.Contains(headerNames, strings.ToLower(noSlashContent)) {
 			headerValue := getHeaderValue(recieved, noSlashContent)
-			fmt.Print(headerValue)
-			response := responseBuilder(200, "text/plain", headerValue)
+			response := responseBuilder(200, "text/plain", encodingMethod, headerValue)
 			conn.Write([]byte(response))
 		} else if strings.HasPrefix(basePath, "/files/") {
 			directory := os.Args[2]
 			fileName := strings.TrimPrefix(basePath, "/files/")
-			data, err := os.ReadFile(directory + fileName)
-			if err != nil {
-				response := responseBuilder(404, "text/plain", "")
-				conn.Write([]byte(response))
-			} else {
-				stringData := string(data)
-				response := responseBuilder(200, "application/octet-stream", stringData)
-				conn.Write([]byte(response))
-			}
+			if method == "POST" {
 
+				body := getBody(recieved)
+
+
+				err = os.WriteFile(directory+fileName, []byte(body), 0644)
+				if err != nil {
+					response := responseBuilder(500, "text/plain", encodingMethod, "")
+					conn.Write([]byte(response))
+				} else {
+					response := responseBuilder(201, "", encodingMethod, "")
+					conn.Write([]byte(response))
+				}
+
+			} else {
+				data, err := os.ReadFile(directory + fileName)
+				if err != nil {
+					response := responseBuilder(404, "text/plain", encodingMethod, "")
+					conn.Write([]byte(response))
+				} else {
+					stringData := string(data)
+					response := responseBuilder(200, "application/octet-stream", encodingMethod, stringData)
+					conn.Write([]byte(response))
+				}
+			}
 		} else {
-			conn.Write([]byte(responseBuilder(404, "text/plain", "")))
+			conn.Write([]byte(responseBuilder(404, "text/plain", encodingMethod, "")))
 		}
 	}
 
+}
+
+func checkEncoding(encoding string) bool {
+	for _, method := range allowedEncoding {
+		if method == encoding {
+			return true
+		}
+	}
+	return false
+}
+
+func getMethod(request string) string {
+	line := strings.Split(request, "\r\n")[0]
+	method := strings.Split(line, " ")[0]
+	return method
+}
+
+func getBody(request string) string {
+	line := strings.Split(request, "\r\n")
+	return line[4]
 }
 
 func getContent(request string) string {
@@ -112,25 +160,56 @@ func getHeaderValue(request string, headerName string) string {
 	lines := strings.Split(request, "\r\n")[1:]
 	for _, line := range lines {
 		if strings.HasPrefix(strings.ToLower(line), headerName) {
-			return strings.Split(line, " ")[1]
+			removedName := strings.Split(line, " ")
+			if len(removedName) > 1 {
+				return strings.Join(removedName[1:], "")
+			}
+			return removedName[1]
 		}
 	}
 	return ""
 }
 
-func responseBuilder(response_code int, content_type string, content string) string {
-	response := ""
+func responseBuilder(response_code int, content_type string, encoding string, content string) string {
+	response := "HTTP/1.1 "
 	if response_code == 200 {
-		response += "HTTP/1.1 200 OK\r\n"
+		response += "200 OK\r\n"
+	} else if response_code == 201 {
+		response += "201 Created"
 	} else if response_code == 404 {
-		response += "HTTP/1.1 404 Not Found\r\n\r\n"
+		response += "404 Not Found"
+	} else if response_code == 500 {
+		response += "500 Internal Server Error"
+	}
+
+	if response_code != 200 {
+		response += "\r\n\r\n"
+	}
+	if encoding != "" {
+		response += "Content-Encoding: " + encoding + "\r\n"
 	}
 
 	if content_type != "" && content != "" {
+		if strings.ToLower(encoding) == "gzip" {
+			content = string(gzipEncoder(content))
+		}
 		contentLength := strconv.Itoa(len(content))
 		response += "Content-type: " + content_type + "\r\n"
 		response += "Content-length: " + contentLength + "\r\n\r\n"
 		response += content + "\r\n\r\n"
 	}
 	return response
+}
+
+
+func gzipEncoder(body string) []byte {
+	var b bytes.Buffer
+	gzipWriter := gzip.NewWriter(&b)
+	_, err := gzipWriter.Write([]byte(body))
+	if err != nil {
+		log.Fatal(err)
+	}
+	gzipWriter.Close()
+	return b.Bytes()
+	
 }
